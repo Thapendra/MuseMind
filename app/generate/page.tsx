@@ -35,26 +35,9 @@ export default function GeneratePage() {
     setSelectedEmotion("neutral")
 
     try {
-      // Stage 1: Analyzing prompt
-      setGenerationProgress("Analyzing your vibe...")
-      await new Promise((resolve) => setTimeout(resolve, 600))
-
-      // Stage 2: Detecting emotion
-      setGenerationProgress("Detecting emotion and genre...")
+      // Stage 1: Send prompt to n8n via our API
+      setGenerationProgress("Sending your idea to the AI agent...")
       setSelectedEmotion("energetic")
-      await new Promise((resolve) => setTimeout(resolve, 500))
-
-      // Stage 3: Generating lyrics
-      setGenerationProgress("Writing lyrics...")
-      setSelectedEmotion("happy")
-      await new Promise((resolve) => setTimeout(resolve, 800))
-
-      // Stage 4: Creating song metadata
-      setGenerationProgress("Creating your song...")
-      await new Promise((resolve) => setTimeout(resolve, 400))
-
-      console.log("[v0] Starting API call to /api/generate-song")
-      setGenerationProgress("Finalizing your masterpiece...")
 
       const response = await fetch("/api/generate-song", {
         method: "POST",
@@ -67,17 +50,78 @@ export default function GeneratePage() {
         throw new Error(errorData.error || `API returned status ${response.status}`)
       }
 
-      const data = (await response.json()) as GeneratedSong
-      console.log("[v0] Song generated successfully:", data)
+      const { jobId } = (await response.json()) as { jobId: string; status: string }
+      console.log("[MuseMind] Job submitted:", jobId)
 
-      // Update emotion based on API response
-      if (data.emotion) {
-        setSelectedEmotion(data.emotion)
+      // Stage 2: Poll for completion
+      const progressMessages = [
+        "AI is composing your lyrics...",
+        "Crafting the melody...",
+        "Generating vocals with Suno AI...",
+        "Mixing and mastering...",
+        "Adding final touches...",
+        "Almost there, hang tight...",
+        "Your song is cooking...",
+      ]
+      let msgIndex = 0
+      setGenerationProgress(progressMessages[0])
+      setSelectedEmotion("happy")
+
+      const POLL_INTERVAL = 3000   // poll every 3 seconds
+      const MAX_WAIT = 300000      // 5 minute timeout
+
+      const startTime = Date.now()
+
+      const result = await new Promise<GeneratedSong>((resolve, reject) => {
+        const poll = async () => {
+          try {
+            // Rotate progress messages to keep the user engaged
+            msgIndex = (msgIndex + 1) % progressMessages.length
+            setGenerationProgress(progressMessages[msgIndex])
+
+            // Cycle through emotions for the visualizer
+            const emotions = ["energetic", "happy", "calm", "energetic"]
+            setSelectedEmotion(emotions[msgIndex % emotions.length])
+
+            const statusRes = await fetch(`/api/generate-song/status?jobId=${jobId}`)
+            const statusData = await statusRes.json()
+
+            if (statusData.status === "complete") {
+              resolve(statusData as GeneratedSong)
+              return
+            }
+
+            if (statusData.status === "error") {
+              reject(new Error(statusData.error || "Song generation failed"))
+              return
+            }
+
+            // Still processing — check timeout
+            if (Date.now() - startTime > MAX_WAIT) {
+              reject(new Error("Song generation timed out. Please try again."))
+              return
+            }
+
+            // Poll again
+            setTimeout(poll, POLL_INTERVAL)
+          } catch (err) {
+            reject(err)
+          }
+        }
+
+        // Start first poll after a short delay (give n8n time to start)
+        setTimeout(poll, POLL_INTERVAL)
+      })
+
+      console.log("[MuseMind] Song ready:", result)
+
+      if (result.emotion) {
+        setSelectedEmotion(result.emotion)
       }
 
-      setGeneratedSong(data)
+      setGeneratedSong(result)
     } catch (error) {
-      console.error("[v0] Generation error:", error)
+      console.error("[MuseMind] Generation error:", error)
       const errorMessage = error instanceof Error ? error.message : "Failed to generate song"
       setError(errorMessage)
       setGenerationProgress("")
